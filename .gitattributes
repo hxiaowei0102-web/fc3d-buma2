@@ -1,0 +1,11 @@
+# 统一行尾规范：所有文本文件以 LF 入库（与云端 GitHub 一致）
+* text=auto
+
+# 明确文本类型（源码/数据/文档全部 LF）
+*.py text eol=lf
+*.json text eol=lf
+*.csv text eol=lf
+*.html text eol=lf
+*.md text eol=lf
+*.yml text eol=lf
+*.gitignore text eol=lf
