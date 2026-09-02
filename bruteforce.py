@@ -3,7 +3,8 @@
 福彩3D 两码不组 — 暴力穷举（双窗口：300期/500期，v1 移植自百十个杀一码）
 =============================================
 公式池：59特征 × 单/双/三特征线性组合，输出 mod 45 = 不组对索引 ≈ 4074万规格。
-numpy 向量化计算窗口期输出，流式维护每个「下一期预测对」桶里的最优公式。
+numpy 向量化批量计算窗口期输出（常数 0..44 广播，语义与原逐规格循环逐桶一致），
+流式维护每个「下一期预测对」桶里的最优公式。
 
 【命中判定】（与旧版不组二/云端晓炜两码不组口径一致）
   预测对 (a,b) 命中 = (a,b) 不是当期同现对（开奖号中去重后任意两个数字组成同现对）。
@@ -25,7 +26,7 @@ numpy 向量化计算窗口期输出，流式维护每个「下一期预测对�
 import json
 import numpy as np
 from engine import load_data
-from formulas import feat_list, iter_specs, formula_name, PAIRS, co_occur_pairs, MOD
+from formulas import feat_list, formula_name, PAIRS, co_occur_pairs, MOD, NF, COEFFS, TRIPLE_COEFFS
 
 CSV = 'data/fc3d-history.csv'
 WINDOW = 300          # 主窗口（网格扫描样本外最优：97.5%命中且稳，2026-09-02固化）
@@ -72,20 +73,88 @@ def search_best(hh, tt, oo, window=WINDOW, verbose=True):
     best = [None] * MOD
     total = 0
     ar = np.arange(window)
-    for terms, const in iter_specs():
-        cols = np.array([idx for _, idx in terms], dtype=np.int64)
-        coeffs = np.array([c for c, _ in terms], dtype=np.int64)
-        fx = F[:, cols] * coeffs
-        out = (fx.sum(axis=1) + const) % MOD
-        bad = M[ar, out]
-        hits = int(window - bad.sum())
-        conf = int(Mp[ar, out].sum())
-        v_next = int(((F_next[:, cols] * coeffs).sum() + const) % MOD)
-        cur = best[v_next]
-        name = formula_name(terms, const)
-        if cur is None or (hits, -conf, -len(name), name) > (cur[0], -cur[1], -len(cur[2]), cur[2]):
-            best[v_next] = (hits, conf, name)
-        total += 1
+
+    # ============ 广播批量穷举（2026-09-02 优化：原逐规格 ~12min/窗口 → 批量 ~2.7min/窗口）============
+    # 原理：40.74M 规格中，同一「特征组合×系数」的 45 个常数输出只需算一次 (window,45) 矩阵，
+    #       Python 迭代从 40.74M 次 numpy 往返 降为 95万批 × 45 次轻量桶比较。
+    # 语义与逐规格完全一致（prof5 全45桶验证 0 差异）：out=(Σc*F+const)%45、hits/conf 同口径、
+    #       v_next=(Σc*F_next+const)%45 分桶、桶内按 (hits,-conf,-len(name),name) 字典序保留。
+    Fm = F % MOD
+    Fnm = [int(x % MOD) for x in F_next[0]]
+    CN = np.arange(MOD, dtype=np.int64)
+
+    def _upd(v, h, cf, terms, ci):
+        """桶内更新：与原版比较元组 (hits, -conf, -len(name), name) 完全一致"""
+        cur = best[v]
+        if cur is None:
+            best[v] = (h, cf, formula_name(terms, ci))
+        else:
+            ch, cc, cn = cur
+            if h > ch or (h == ch and cf < cc):
+                best[v] = (h, cf, formula_name(terms, ci))
+            elif h == ch and cf == cc:
+                nm = formula_name(terms, ci)
+                if len(nm) < len(cn) or (len(nm) == len(cn) and nm > cn):
+                    best[v] = (h, cf, nm)
+
+    # -- 单特征: NF × |COEFFS| 批 --
+    for i in range(NF):
+        Fi = Fm[:, i]; fin = Fnm[i]
+        for c in COEFFS:
+            base = (Fi * c) % MOD
+            outs = (base[:, None] + CN[None, :]) % MOD
+            hits = window - M[ar[:, None], outs].sum(axis=0)
+            confs = Mp[ar[:, None], outs].sum(axis=0)
+            vn = (fin * c + CN) % MOD
+            terms = ((c, i),)
+            hl = hits.tolist(); cl = confs.tolist(); vl = vn.tolist()
+            for ci in range(MOD):
+                _upd(vl[ci], hl[ci], cl[ci], terms, ci)
+            total += MOD
+
+    # -- 双特征: C(NF,2) × |COEFFS|² 批 --
+    for i in range(NF):
+        Fi = Fm[:, i]; fin = Fnm[i]
+        for j in range(i + 1, NF):
+            Fj = Fm[:, j]; fjn = Fnm[j]
+            for c1 in COEFFS:
+                p1 = (Fi * c1) % MOD
+                for c2 in COEFFS:
+                    base = (p1 + (Fj * c2)) % MOD
+                    outs = (base[:, None] + CN[None, :]) % MOD
+                    hits = window - M[ar[:, None], outs].sum(axis=0)
+                    confs = Mp[ar[:, None], outs].sum(axis=0)
+                    bn = (fin * c1 + fjn * c2) % MOD
+                    vn = (bn + CN) % MOD
+                    terms = ((c1, i), (c2, j))
+                    hl = hits.tolist(); cl = confs.tolist(); vl = vn.tolist()
+                    for ci in range(MOD):
+                        _upd(vl[ci], hl[ci], cl[ci], terms, ci)
+                    total += MOD
+
+    # -- 三特征: C(NF,3) × |TRIPLE_COEFFS|³ 批 --
+    for i in range(NF):
+        Fi = Fm[:, i]; fin = Fnm[i]
+        for j in range(i + 1, NF):
+            Fj = Fm[:, j]; fjn = Fnm[j]
+            for k in range(j + 1, NF):
+                Fk = Fm[:, k]; fkn = Fnm[k]
+                for c1 in TRIPLE_COEFFS:
+                    p1 = (Fi * c1) % MOD
+                    for c2 in TRIPLE_COEFFS:
+                        p2 = (Fj * c2) % MOD
+                        for c3 in TRIPLE_COEFFS:
+                            base = (p1 + p2 + (Fk * c3)) % MOD
+                            outs = (base[:, None] + CN[None, :]) % MOD
+                            hits = window - M[ar[:, None], outs].sum(axis=0)
+                            confs = Mp[ar[:, None], outs].sum(axis=0)
+                            bn = (fin * c1 + fjn * c2 + fkn * c3) % MOD
+                            vn = (bn + CN) % MOD
+                            terms = ((c1, i), (c2, j), (c3, k))
+                            hl = hits.tolist(); cl = confs.tolist(); vl = vn.tolist()
+                            for ci in range(MOD):
+                                _upd(vl[ci], hl[ci], cl[ci], terms, ci)
+                            total += MOD
 
     ranked = sorted([(b[0], -b[1], len(b[2]), b[2], i) for i, b in enumerate(best) if b],
                     key=lambda x: (-x[0], x[1], x[2], x[3]))
