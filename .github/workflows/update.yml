@@ -1,0 +1,104 @@
+name: 福彩3D两码不组 自动更新
+
+on:
+  schedule:
+    # 北京时间 22:00 / 23:30 / 01:00 = UTC 14:00 / 15:30 / 17:00（三重备份，3次机会兜底）
+    - cron: '0 14 * * *'
+    - cron: '30 15 * * *'
+    - cron: '0 17 * * *'
+  workflow_dispatch:
+    inputs:
+      force_deploy:
+        description: '强制重新部署页面（即使无数据/公式变化）'
+        required: false
+        default: 'false'
+        type: boolean
+
+# 并发保护：三重cron若撞车，取消旧运行，只保留最新一次
+concurrency:
+  group: fc3d-buma-update
+  cancel-in-progress: true
+
+jobs:
+  update:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      pages: write
+      id-token: write
+
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+
+    steps:
+      - name: 检出代码
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+
+      - name: 安装Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: 安装依赖(numpy)
+        # 锁定 <3 防未来破坏性升级改变穷举结果
+        run: pip install "numpy>=1.26,<3"
+
+      - name: 运行更新脚本(多源降级+期号校验+穷举+回测+生成页面)
+        run: python auto_update.py || exit 1
+
+      - name: 检查是否有真实数据更新
+        id: check
+        run: |
+          # 强制部署：直接跳过判断
+          if [ "${{ inputs.force_deploy }}" == "true" ]; then
+            echo "changed=true" >> $GITHUB_OUTPUT
+            echo "force_deploy=true: 强制部署"
+          # 以核心产物判断：CSV/双窗口公式/页面/双窗口预测日志 任一有变化才算真实更新（无变化时脚本不重写页面，时间戳不会误判）
+          elif git diff --quiet data/fc3d-history.csv && git diff --quiet best_pair.json && git diff --quiet best_pair_500.json && git diff --quiet static/index.html && git diff --quiet predictions_log.csv && git diff --quiet predictions_log_500.csv; then
+            echo "changed=false" >> $GITHUB_OUTPUT
+            git checkout -- static/index.html 2>/dev/null || true
+            echo "无新数据/无公式变化，跳过提交与部署"
+          else
+            echo "changed=true" >> $GITHUB_OUTPUT
+            echo "检测到真实更新(CSV/公式/页面/预测日志)"
+          fi
+
+      - name: 提交更新
+        if: steps.check.outputs.changed == 'true'
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add -A data/ static/ best_pair.json best_pair_500.json predictions_log.csv predictions_log_500.csv || true
+          git commit -m "自动更新$(TZ='Asia/Shanghai' date +%m%d) [skip ci]" || true
+          for i in 1 2 3; do
+            if git pull --rebase origin main && git push; then
+              echo "推送成功"
+              break
+            fi
+            echo "第${i}次推送失败，3秒后重试"
+            sleep 3
+          done
+
+      - name: 准备部署文件
+        if: steps.check.outputs.changed == 'true'
+        run: |
+          mkdir -p _site
+          cp static/index.html _site/
+
+      - name: 配置Pages
+        if: steps.check.outputs.changed == 'true'
+        uses: actions/configure-pages@v5
+
+      - name: 上传部署产物
+        if: steps.check.outputs.changed == 'true'
+        uses: actions/upload-pages-artifact@v3
+        with:
+          path: ./_site
+
+      - name: 部署到GitHub Pages
+        if: steps.check.outputs.changed == 'true'
+        id: deployment
+        uses: actions/deploy-pages@v4
