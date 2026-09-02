@@ -43,14 +43,27 @@ def main():
     new_combo = r_main['main']['name'] if r_main else None
     new_combo_500 = r_sub['main']['name'] if r_sub else None
 
-    def _old_combo(path):
+    def _old_main(path):
+        """读旧 best_pair*.json 的 (name, pair, hits)。返回 None 表示文件缺失。"""
         try:
             with open(path, 'r', encoding='utf-8') as f:
-                return json.load(f).get('main', {}).get('name')
+                m = json.load(f).get('main', {})
+                return (m.get('name'), m.get('pair'), m.get('hits'))
         except Exception:
             return None
-    formula_changed = (new_combo is not None and _old_combo(COMBO_JSON) != new_combo) or \
-                      (new_combo_500 is not None and _old_combo(COMBO_500_JSON) != new_combo_500)
+
+    def _new_sig(r, combo_path):
+        """比较新旧 (name, pair, hits)：任一变化都视为公式结果变化。
+        只比 name 会漏掉『同公式但窗口滚动致 v_next 桶漂移、pair/hits 变化』→ 页面 stale。"""
+        if r is None:
+            return False
+        old = _old_main(combo_path)
+        if old is None:
+            return True
+        nm = r['main']['name']
+        return (nm, r['main']['pair'], r['main']['hits']) != old
+
+    formula_changed = _new_sig(r_main, COMBO_JSON) or _new_sig(r_sub, COMBO_500_JSON)
 
     gen_site_run = False
     if added == 0 and not formula_changed:
