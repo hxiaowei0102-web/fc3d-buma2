@@ -6,6 +6,11 @@
 numpy 向量化批量计算窗口期输出（常数 0..44 广播，语义与原逐规格循环逐桶一致），
 流式维护每个「下一期预测对」桶里的最优公式。
 
+【性能演进】
+  2026-09-02 广播批量：40.74M Python 往返 → 90.5万批 × 45 轻量桶比较（12min/窗口 → 2.7min）。
+  2026-09-03 稀疏 bincount：稠密 (window,45) gather(13500 元素/批) → 稀疏非零(~719) 累加
+              + np.bincount 成型（205s/窗口 → ~40s/窗口，5.2x；prof8 全量 90.5万批零差异）。
+
 【命中判定】（与旧版不组二/云端晓炜两码不组口径一致）
   预测对 (a,b) 命中 = (a,b) 不是当期同现对（开奖号中去重后任意两个数字组成同现对）。
   向量化：M[t, v] = 当期同现对索引是否含 v；命中数 = Σ (M[t, out[t]] == False)。
@@ -59,7 +64,9 @@ def search_best(hh, tt, oo, window=WINDOW, verbose=True):
                                  prev=(hh[start + window - 2], tt[start + window - 2],
                                        oo[start + window - 2]))], dtype=np.int64)
 
-    # 当期同现布尔矩阵 M (window,45)；上期同现布尔矩阵 Mp (window,45)
+    # 当期同现布尔矩阵 M (window,45)；上期同现布尔矩阵 Mp (window,45)。
+    # 稀疏紧凑索引：T_idx/S_idx 为 M 的非零 (行t, 同现对s) 坐标，同理 Tp_idx/Sp_idx 为 Mp。
+    # 实测每窗口非零 ~719 个（稠密 300×45=13500 的 5%），是加速关键。
     M = np.zeros((window, MOD), dtype=bool)
     Mp = np.zeros((window, MOD), dtype=bool)
     for k in range(window):
@@ -68,17 +75,21 @@ def search_best(hh, tt, oo, window=WINDOW, verbose=True):
         if k >= 1:
             for i in co_occur_pairs(hh[start + k - 1], tt[start + k - 1], oo[start + k - 1]):
                 Mp[k, i] = True
+    T_idx, S_idx = np.nonzero(M)
+    Tp_idx, Sp_idx = np.nonzero(Mp)
 
     # 45 桶：best[v] = (hits, conf, name, v)。所有桶均可发布（不再剔除撞上期）
     best = [None] * MOD
     total = 0
-    ar = np.arange(window)
 
-    # ============ 广播批量穷举（2026-09-02 优化：原逐规格 ~12min/窗口 → 批量 ~2.7min/窗口）============
-    # 原理：40.74M 规格中，同一「特征组合×系数」的 45 个常数输出只需算一次 (window,45) 矩阵，
-    #       Python 迭代从 40.74M 次 numpy 往返 降为 95万批 × 45 次轻量桶比较。
-    # 语义与逐规格完全一致（prof5 全45桶验证 0 差异）：out=(Σc*F+const)%45、hits/conf 同口径、
-    #       v_next=(Σc*F_next+const)%45 分桶、桶内按 (hits,-conf,-len(name),name) 字典序保留。
+    # ============ 稀疏 bincount 穷举（2026-09-03 优化：稠密 gather 205s/窗口 → 稀疏 ~40s/窗口，5.2x）============
+    # 原理1（广播批量，2026-09-02）：同一「特征组合×系数」的 45 个常数只需算一次，
+    #       Python 迭代从 40.74M 次降为 90.5万批 × 45 次轻量桶比较。
+    # 原理2（稀疏 bincount，2026-09-03）：hits[ci] = window - Σ_t M[t,(base[t]+ci)%45]。
+    #       稠密法每批用 (window,45) 花式索引 gather 13500 元素；稀疏法只对 M 的非零
+    #       (~719) 个 (t,s) 累加 pen[(s-base[t])%45] += 1，再用 np.bincount 一次成型，
+    #       语义等价且省 ~95% 运算（prof7 抽样 2000 批 + prof8 全量 90.5万批均验证 0 差异）。
+    # hits/conf 口径、v_next 分桶、(hits,-conf,-len(name),name) 字典序全部与旧版逐位一致。
     Fm = F % MOD
     Fnm = [int(x % MOD) for x in F_next[0]]
     CN = np.arange(MOD, dtype=np.int64)
@@ -97,14 +108,18 @@ def search_best(hh, tt, oo, window=WINDOW, verbose=True):
                 if len(nm) < len(cn) or (len(nm) == len(cn) and nm > cn):
                     best[v] = (h, cf, nm)
 
+    def _penalties(base):
+        """给定 (window,) 的 base，返回 (hits, confs) 各 45 桶（稀疏 bincount）"""
+        hits = window - np.bincount((S_idx - base[T_idx]) % MOD, minlength=MOD)
+        confs = np.bincount((Sp_idx - base[Tp_idx]) % MOD, minlength=MOD)
+        return hits, confs
+
     # -- 单特征: NF × |COEFFS| 批 --
     for i in range(NF):
         Fi = Fm[:, i]; fin = Fnm[i]
         for c in COEFFS:
             base = (Fi * c) % MOD
-            outs = (base[:, None] + CN[None, :]) % MOD
-            hits = window - M[ar[:, None], outs].sum(axis=0)
-            confs = Mp[ar[:, None], outs].sum(axis=0)
+            hits, confs = _penalties(base)
             vn = (fin * c + CN) % MOD
             terms = ((c, i),)
             hl = hits.tolist(); cl = confs.tolist(); vl = vn.tolist()
@@ -121,9 +136,7 @@ def search_best(hh, tt, oo, window=WINDOW, verbose=True):
                 p1 = (Fi * c1) % MOD
                 for c2 in COEFFS:
                     base = (p1 + (Fj * c2)) % MOD
-                    outs = (base[:, None] + CN[None, :]) % MOD
-                    hits = window - M[ar[:, None], outs].sum(axis=0)
-                    confs = Mp[ar[:, None], outs].sum(axis=0)
+                    hits, confs = _penalties(base)
                     bn = (fin * c1 + fjn * c2) % MOD
                     vn = (bn + CN) % MOD
                     terms = ((c1, i), (c2, j))
@@ -145,9 +158,7 @@ def search_best(hh, tt, oo, window=WINDOW, verbose=True):
                         p2 = (Fj * c2) % MOD
                         for c3 in TRIPLE_COEFFS:
                             base = (p1 + p2 + (Fk * c3)) % MOD
-                            outs = (base[:, None] + CN[None, :]) % MOD
-                            hits = window - M[ar[:, None], outs].sum(axis=0)
-                            confs = Mp[ar[:, None], outs].sum(axis=0)
+                            hits, confs = _penalties(base)
                             bn = (fin * c1 + fjn * c2 + fkn * c3) % MOD
                             vn = (bn + CN) % MOD
                             terms = ((c1, i), (c2, j), (c3, k))
