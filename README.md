@@ -38,7 +38,7 @@ python audit_backtest.py         # 审计 0 不一致
 python track_predictions.py      # 只看每日跟踪
 ```
 
-本地预览: http://127.0.0.1:8899/static/index.html
+本地预览: 直接用编辑器打开 static/index.html（文件自包含，无需启动本地服务）
 线上页面: https://hxiaowei0102-web.github.io/fc3d-buma2/
 
 ## 诚实提示
