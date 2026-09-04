@@ -54,4 +54,4 @@ if __name__ == '__main__':
     gen_site.main(out_path='static/index.html')
 
     print(f"\n完成 ✓  总耗时 {time.time()-t0:.1f} 秒")
-    print(f"本地预览: http://127.0.0.1:8899/static/index.html")
+    print(f"页面已生成: static/index.html（文件自包含，直接双击/编辑器打开即可预览）")
