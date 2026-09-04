@@ -104,16 +104,20 @@ def build_data():
             'pred_pair': pn['pair'],
             'pred_source': pn['source'],
         }
-        # 独立跟踪看板（同百十个方案：每窗口独立 pending 优先，公式重算兜底）
+        # 独立跟踪看板。主卡片 = 针对 next_issue 的预测：
+        # 跟踪日志中有该下期号的 pending 真实记录 → 优先展示（开奖前留痕）；
+        # 否则（页面生成早于跟踪写入，或跟踪不可用）→ 用公式重算 pred_pair 兜底，
+        # 保证主卡片永远显示"当前下期"的正确预测，绝不显示已开奖的旧一期。
         d = windows[cfg['win']]
         try:
             tk_rows = sorted(track_predictions._load_log(cfg['log']).values(),
                              key=lambda x: int(x['issue']))
             d['track'] = _track_block(tk_rows, cfg['log'])
-            pend = [r for r in tk_rows if r.get('status') == 'pending']
-            if pend:
-                lp = pend[-1]
-                d['pair'], d['src'] = lp.get('pair', ''), 'track'
+            nxt = d['next_issue']
+            pend_next = [r for r in tk_rows
+                         if r.get('status') == 'pending' and r.get('issue') == nxt]
+            if pend_next:
+                d['pair'], d['src'] = pend_next[-1].get('pair', ''), 'track'
             else:
                 d['pair'], d['src'] = d['pred_pair'], 'formula'
         except Exception as e:
