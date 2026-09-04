@@ -4,10 +4,11 @@
 =============================================
 流程：多源降级抓取最新开奖 → 追加到CSV → 双窗口(300主/500副)暴力穷举
       → 生成 static/index.html（部署到 GitHub Pages，页面按钮切换两窗口）→ 每日预测跟踪
-幂等设计：数据与公式均无变化时不重写页面（含时间戳），
+幂等设计：数据与公式均无变化（且跟踪无新增）时不重写页面（含时间戳），
          workflow 的 git diff 检测不到任何变化即跳过提交与部署，零无效更新。
-注意：预测跟踪必须放在 best_pair.json 写入之后执行，否则会用旧公式记录预测，
-      导致跟踪日志与页面显示不一致。
+注意：①预测跟踪必须在 best_pair*.json 写入之后执行，否则会用旧公式记录预测。
+     ②页面生成必须在预测跟踪之后执行（跟踪先写入本下期 pending，页面再嵌入），
+       否则主卡片会显示"上一期"的旧预测对（曾现 2026237 页面显示 2026236 的 59/14 bug）。
 """
 import sys, io, os, time, json
 sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding='utf-8')
@@ -65,17 +66,11 @@ def main():
 
     formula_changed = _new_sig(r_main, COMBO_JSON) or _new_sig(r_sub, COMBO_500_JSON)
 
-    gen_site_run = False
-    if added == 0 and not formula_changed:
-        print("\n[3/6] 数据与公式均无变化，跳过页面生成（零无效更新）")
-    else:
-        print("\n[3/6] 生成网页（含300/500双窗口）")
-        os.makedirs('static', exist_ok=True)
-        import gen_site
-        gen_site.main(out_path=OUT_HTML)
-        gen_site_run = True
-
-    print("\n[4/6] 双窗口每日预测跟踪（300 主 + 500 副 各自验证昨日 + 记录今日）")
+    # 步骤顺序（重要）：[3]跟踪 → [4]页面。
+    # 跟踪先验证昨日 + 写入今日(next_issue)的 pending 预测；
+    # 页面后生成，build_data 用 pred_pair(公式重算) 为主卡片，仅在跟踪已含
+    # 本下期 pending 时优先采用，天然与公式一致、永不落后一期。
+    print("\n[3/6] 双窗口每日预测跟踪（300 主 + 500 副 各自验证昨日 + 记录今日）")
     track_changed = False
     try:
         import track_predictions
@@ -83,10 +78,22 @@ def main():
     except Exception as e:
         print(f"  ⚠ 预测跟踪异常（不影响主流程）: {str(e)[:80]}")
 
-    if track_changed and not gen_site_run:
-        print("[5/6] 跟踪有新记录，补生成页面（含最新跟踪看板）")
+    gen_site_run = False
+    data_or_formula = (added > 0) or formula_changed
+    if not data_or_formula and not track_changed:
+        print("\n[4/6] 数据/公式/跟踪均无变化，跳过页面生成（零无效更新）")
+    else:
+        print("\n[4/6] 生成网页（含300/500双窗口 + 最新跟踪看板）")
+        os.makedirs('static', exist_ok=True)
         import gen_site
         gen_site.main(out_path=OUT_HTML)
+        gen_site_run = True
+
+    print("\n[5/6] 完成产物状态确认")
+    if gen_site_run:
+        print("  ✅ 页面已按最新数据/公式/跟踪重新生成")
+    else:
+        print("  — 无任何变化，页面保持原样（零无效更新）")
 
     print("\n[6/6] 完成")
     print(f"  总耗时 {time.time()-t0:.1f} 秒")
