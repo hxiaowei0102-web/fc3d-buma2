@@ -367,7 +367,7 @@ document.getElementById('dataInfo').textContent = P.data_info.last;
 """
 
 
-def main(out_path='index.html'):
+def main(out_path='static/index.html'):
     data = build_data()
     data_json = json.dumps(data, ensure_ascii=False)
     html = HTML_TEMPLATE.replace('__DATA__', data_json)
