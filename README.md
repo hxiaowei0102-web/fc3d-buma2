@@ -22,23 +22,24 @@
 |---|---|
 | engine.py | 数据引擎：读 CSV → 期号/百/十/个 |
 | formulas.py | 59特征 + 45对表 + 4074万公式生成器（mod 45） |
-| bruteforce.py | 双窗口穷举 → best_pair.json(300主) / best_pair_500.json(500副) |
+| bruteforce.py | 双窗口穷举 → best_pair.json(300主) / best_pair_500.json(500副)（稀疏bincount,约62s/双窗口） |
 | backtest.py | 固定公式逐期回看 + 预测下期 |
 | track_predictions.py | 每日预测留痕：回填500期 + 验证pending + 记录今日 |
 | gen_site.py | 生成手机端静态网页 static/index.html |
-| fetch.py | 多源降级抓取最新开奖（huiniao→17500→apihz）+ CSV兜底 |
-| update.py | 本地一键：同步→穷举→回测→生成网页 |
-| auto_update.py | 云端全自动入口（6步编排） |
+| fetch.py | 多源降级抓取最新开奖（cwl官方→huiniao→17500→apihz）+ CSV兜底 |
+| update.py | 本地一键：同步→穷举→回测→跟踪→生成网页（与云端同流程） |
+| auto_update.py | 云端全自动入口（跟踪→生成页面 顺序） |
 | audit_backtest.py | 防未来信息审计（0不一致才通过） |
 
 ## 运行
 ```
-python update.py                 # 本地一键（穷举约12分钟）
+python update.py                 # 本地一键（穷举约1分钟/双窗口）
 python audit_backtest.py         # 审计 0 不一致
 python track_predictions.py      # 只看每日跟踪
 ```
 
-本地预览: http://127.0.0.1:8899/index.html
+本地预览: http://127.0.0.1:8899/static/index.html
+线上页面: https://hxiaowei0102-web.github.io/fc3d-buma2/
 
 ## 诚实提示
 命中率 ~96% 是窗口内过拟合极值（选择偏差上界），样本外真实水平接近 94.6% 基线。
