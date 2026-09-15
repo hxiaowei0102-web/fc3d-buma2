@@ -1,9 +1,9 @@
 {
   "window": 500,
   "data_info": {
-    "n_issues": 8755,
+    "n_issues": 8756,
     "first": "2002001",
-    "last": "2026247"
+    "last": "2026248"
   },
   "pool_size": 40740975,
   "main": {
@@ -11,7 +11,7 @@
     "pair": "06",
     "rate": 0.992,
     "hits": 496,
-    "conf": 31,
+    "conf": 32,
     "next_pair": "06"
   },
   "rate": 99.2
