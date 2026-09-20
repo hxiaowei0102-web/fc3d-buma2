@@ -1,9 +1,9 @@
 {
   "window": 300,
   "data_info": {
-    "n_issues": 8760,
+    "n_issues": 8761,
     "first": "2002001",
-    "last": "2026252"
+    "last": "2026253"
   },
   "pool_size": 40740975,
   "main": {
