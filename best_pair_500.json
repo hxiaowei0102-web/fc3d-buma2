@@ -1,18 +1,18 @@
 {
   "window": 500,
   "data_info": {
-    "n_issues": 8769,
+    "n_issues": 8770,
     "first": "2002001",
-    "last": "2026261"
+    "last": "2026262"
   },
   "pool_size": 40740975,
   "main": {
     "name": "3*g3+1*d3+1*mxmn+10",
-    "pair": "24",
+    "pair": "29",
     "rate": 0.992,
     "hits": 496,
-    "conf": 31,
-    "next_pair": "24"
+    "conf": 30,
+    "next_pair": "29"
   },
   "rate": 99.2
 }
