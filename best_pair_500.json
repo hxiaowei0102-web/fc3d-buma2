@@ -1,18 +1,18 @@
 {
   "window": 500,
   "data_info": {
-    "n_issues": 8793,
+    "n_issues": 8794,
     "first": "2002001",
-    "last": "2026285"
+    "last": "2026286"
   },
   "pool_size": 40740975,
   "main": {
     "name": "3*sum3+1*dsum+1*bsg2+37",
-    "pair": "15",
+    "pair": "13",
     "rate": 0.992,
     "hits": 496,
     "conf": 29,
-    "next_pair": "15"
+    "next_pair": "13"
   },
   "rate": 99.2
 }
